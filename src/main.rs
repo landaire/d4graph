@@ -177,7 +177,7 @@ fn main() {
             continue;
         }
 
-        let outgoing_edges = graph.edges_directed(target_node, Direction::Outgoing);
+        let outgoing_edges = graph.edges_directed(node_id, Direction::Outgoing);
         for outgoing_edge in outgoing_edges {
             outgoing_edges_queue.push((depth + 1, outgoing_edge.target()));
         }
@@ -192,7 +192,7 @@ fn main() {
             continue;
         }
 
-        let incoming_edges = graph.edges_directed(target_node, Direction::Incoming);
+        let incoming_edges = graph.edges_directed(node_id, Direction::Incoming);
         for incoming_edge in incoming_edges {
             incoming_edges_queue.push((depth + 1, incoming_edge.source()));
         }
