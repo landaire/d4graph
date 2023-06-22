@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Display,
     path::PathBuf,
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use clap::{command, Parser};
@@ -25,7 +25,7 @@ struct Args {
     json_path: PathBuf,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Object {
     filename: String,
     id: usize,
@@ -34,7 +34,12 @@ struct Object {
 
 impl Display for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} (sno={})", self.filename, self.id)
+        write!(
+            f,
+            "{}\n(sno={})",
+            self.filename.split("/").last().unwrap(),
+            self.id
+        )
     }
 }
 
@@ -64,7 +69,7 @@ fn main() {
 
     println!("Building objects");
     let mut pb = ProgressBar::new(files.len() as u64);
-    let objects: Vec<Object> = files
+    let objects: Vec<_> = files
         .par_iter()
         .filter_map(|file| {
             pb.inc(1);
@@ -82,15 +87,22 @@ fn main() {
             obj_queue.push(&json_obj);
 
             while let Some(obj) = obj_queue.pop() {
-                let obj = obj.as_object()?;
-                if obj.contains_key("value") && obj.contains_key("name") {
-                    // reference to another file
-                    return_object
-                        .outbound_references
-                        .push(obj["value"].as_u64()? as usize);
-                } else {
-                    for (_key, nested_obj) in obj.iter() {
-                        if nested_obj.is_object() {
+                if let Some(obj) = obj.as_object() {
+                    if obj.contains_key("value") && obj.contains_key("name") {
+                        // reference to another file
+                        return_object
+                            .outbound_references
+                            .push(obj["value"].as_u64()? as usize);
+                    } else {
+                        for (_key, nested_obj) in obj.iter() {
+                            if nested_obj.is_object() || nested_obj.is_array() {
+                                obj_queue.push(nested_obj);
+                            }
+                        }
+                    }
+                } else if let Some(arr) = obj.as_array() {
+                    for nested_obj in arr.iter() {
+                        if nested_obj.is_object() || nested_obj.is_array() {
                             obj_queue.push(nested_obj);
                         }
                     }
@@ -101,7 +113,27 @@ fn main() {
         })
         .collect();
 
-    let mut edges = Vec::new();
+    // println!("Building file groups");
+    // let pb = ProgressBar::new(objects.len() as u64);
+    // let mut file_groups = HashMap::<String, HashMap<String, usize>>::new();
+    // for object in &objects {
+    //     let path = PathBuf::from(object.filename.as_str());
+    //     if path.starts_with("data/base/meta/") {
+    //         if let Some(group) = path.parent() {
+    //             file_groups
+    //                 .entry(group.file_name().unwrap().to_str().unwrap().to_string())
+    //                 .or_default()
+    //                 .insert(
+    //                     path.file_stem().unwrap().to_str().unwrap().to_string(),
+    //                     object.id,
+    //                 );
+    //         }
+    //     }
+
+    //     pb.inc(1);
+    // }
+
+    let mut edges = HashSet::new();
     let mut node_indices = HashMap::new();
 
     let mut pb = ProgressBar::new(objects.len() as u64);
@@ -114,7 +146,7 @@ fn main() {
         let node = graph.add_node(object);
         node_indices.insert(object_id, node);
         for to_id in outbound_references {
-            edges.push((object_id, to_id));
+            edges.insert((object_id, to_id));
         }
         pb.inc(1);
     }
@@ -133,46 +165,44 @@ fn main() {
     pb.finish();
 
     // Strip out anything that doesn't have a path to 1315204
-    println!("Filtering nodes");
+    println!("Filtering outgoing nodes");
     let target_node = node_indices.get(&1315204).cloned().unwrap();
     let mut indices: Vec<_> = graph.node_indices().collect();
-    let mut nodes_to_remove = HashSet::new();
-    let mut pb = ProgressBar::new(indices.len() as u64);
-    while let Some(node) = indices.pop() {
-        let nodes = dijkstra(&graph, node, Some(target_node), |_| 1);
-        if !nodes.contains_key(&target_node) {
-            nodes_to_remove.extend(nodes.keys());
-            // // Remove this entire subtree
-            // let mut queue = vec![node];
-            // while let Some(node) = queue.pop() {
-            //     // get all outgoing edges
-            //     let edges = graph.edges(node);
-            //     for edge in edges.collect::<Vec<_>>() {
-            //         queue.push(edge.target());
-            //     }
-            //     nodes_to_remove.push(node);
-            // }
-        } else {
-            // We don't need to test any nodes in this path. Each one has a path
-            // to the target
-            indices = indices
-                .iter()
-                .filter(|idx| nodes.contains_key(*idx))
-                .cloned()
-                .collect();
+    // Keep any nodes that are within a distance of 3 from the target node from the incoming direction
+    let mut keep_indices = HashSet::new();
+    let mut outgoing_edges_queue = vec![(0, target_node)];
+    while let Some((depth, node_id)) = outgoing_edges_queue.pop() {
+        keep_indices.insert(node_id);
+        if depth == 5 {
+            continue;
         }
-        pb.inc(1);
+
+        let outgoing_edges = graph.edges_directed(target_node, Direction::Outgoing);
+        for outgoing_edge in outgoing_edges {
+            outgoing_edges_queue.push((depth + 1, outgoing_edge.target()));
+        }
     }
 
-    pb.finish();
+    println!("Filtering incoming nodes");
+    // Keep any nodes that are within a distance of 3 from the target node from the incoming direction
+    let mut incoming_edges_queue = vec![(0, target_node)];
+    while let Some((depth, node_id)) = incoming_edges_queue.pop() {
+        keep_indices.insert(node_id);
+        if depth == 5 {
+            continue;
+        }
+
+        let incoming_edges = graph.edges_directed(target_node, Direction::Incoming);
+        for incoming_edge in incoming_edges {
+            incoming_edges_queue.push((depth + 1, incoming_edge.source()));
+        }
+    }
 
     println!("Removing filtered nodes from graph");
-    let mut pb = ProgressBar::new(nodes_to_remove.len() as u64);
-    for node in nodes_to_remove {
-        graph.remove_node(node);
-        pb.inc(1);
-    }
-    pb.finish();
+
+    graph.retain_nodes(|_g, node| keep_indices.contains(&node));
+
+    println!("Writing graph");
 
     let dot_data = Dot::with_config(&graph, &[Config::EdgeNoLabel]);
     std::fs::write("min_graph.dot", format!("{}", dot_data));
