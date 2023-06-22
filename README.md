@@ -32,7 +32,7 @@ Options:
 5. Convert the output graph to an SVG using Graphviz: `dot -Tsvg graph.dot > graph.svg`
 
 
-You can tweak the target node ID and the number of incoming/outgoing nodes to graph by using the corresponding command line options. For example, if you wanted to generate a graph for [https://diablo4.cc/sno/1088228](`QST_Kehj_TriuneRitualMain.qst`):
+You can tweak the target node ID and the number of incoming/outgoing nodes to graph by using the corresponding command line options. For example, if you wanted to generate a graph for [`QST_Kehj_TriuneRitualMain.qst`](https://diablo4.cc/sno/1088228):
 
 ```
 $ cargo run --release -- --target-node-id 1088228
