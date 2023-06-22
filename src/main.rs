@@ -21,6 +21,21 @@ use walkdir::WalkDir;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Number of incoming nodes to trace back and include in output graph
+    #[clap(long, default_value = "3")]
+    incoming_count: usize,
+
+    /// Number of incoming nodes from the target node to include in the output graph
+    #[clap(long, default_value = "3")]
+    outgoing_count: usize,
+
+    /// SNO ID to consider as our target node (defaults to SecretCellar.qst)
+    #[clap(short, long, default_value = "1315204")]
+    target_node_id: usize,
+
+    #[clap(short, long, default_value = "graph.dot")]
+    out_file: PathBuf,
+
     /// Number of times to greet
     json_path: PathBuf,
 }
@@ -113,26 +128,6 @@ fn main() {
         })
         .collect();
 
-    // println!("Building file groups");
-    // let pb = ProgressBar::new(objects.len() as u64);
-    // let mut file_groups = HashMap::<String, HashMap<String, usize>>::new();
-    // for object in &objects {
-    //     let path = PathBuf::from(object.filename.as_str());
-    //     if path.starts_with("data/base/meta/") {
-    //         if let Some(group) = path.parent() {
-    //             file_groups
-    //                 .entry(group.file_name().unwrap().to_str().unwrap().to_string())
-    //                 .or_default()
-    //                 .insert(
-    //                     path.file_stem().unwrap().to_str().unwrap().to_string(),
-    //                     object.id,
-    //                 );
-    //         }
-    //     }
-
-    //     pb.inc(1);
-    // }
-
     let mut edges = HashSet::new();
     let mut node_indices = HashMap::new();
 
@@ -166,14 +161,27 @@ fn main() {
 
     // Strip out anything that doesn't have a path to 1315204
     println!("Filtering outgoing nodes");
-    let target_node = node_indices.get(&1315204).cloned().unwrap();
+    // secret quest
+    //let target_node = node_indices.get(&1315204).cloned().unwrap();
+    // designer variables
+    //let target_node = node_indices.get(&1040018).cloned().unwrap();
+    // triune ritual
+    let target_node = node_indices
+        .get(&args.target_node_id)
+        .cloned()
+        .expect("Failed to find target node");
+
     let mut indices: Vec<_> = graph.node_indices().collect();
     // Keep any nodes that are within a distance of 3 from the target node from the incoming direction
     let mut keep_indices = HashSet::new();
     let mut outgoing_edges_queue = vec![(0, target_node)];
     while let Some((depth, node_id)) = outgoing_edges_queue.pop() {
+        if graph[node_id].filename.contains("World/") {
+            continue;
+        }
+
         keep_indices.insert(node_id);
-        if depth == 5 {
+        if depth == args.outgoing_count {
             continue;
         }
 
@@ -187,8 +195,11 @@ fn main() {
     // Keep any nodes that are within a distance of 3 from the target node from the incoming direction
     let mut incoming_edges_queue = vec![(0, target_node)];
     while let Some((depth, node_id)) = incoming_edges_queue.pop() {
+        if graph[node_id].filename.contains("World/") {
+            continue;
+        }
         keep_indices.insert(node_id);
-        if depth == 5 {
+        if depth == args.incoming_count {
             continue;
         }
 
@@ -205,5 +216,5 @@ fn main() {
     println!("Writing graph");
 
     let dot_data = Dot::with_config(&graph, &[Config::EdgeNoLabel]);
-    std::fs::write("min_graph.dot", format!("{}", dot_data));
+    std::fs::write(&args.out_file, format!("{}", dot_data));
 }
