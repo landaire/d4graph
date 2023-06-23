@@ -207,15 +207,14 @@ fn main() {
 
     while let Some((depth, node_id)) = outgoing_edges_queue.pop() {
         graph[node_id].distance.store(depth, Ordering::Relaxed);
-        if depth > 0 && should_ignore_node(node_id, Direction::Outgoing) {
+        keep_indices.insert(node_id);
+
+        if depth > 0 && should_ignore_node(node_id, Direction::Outgoing)
+            || depth == args.outgoing_count
+        {
             graph[node_id]
                 .outgoing_filtered
                 .store(true, Ordering::Relaxed);
-            continue;
-        }
-
-        keep_indices.insert(node_id);
-        if depth == args.outgoing_count {
             continue;
         }
 
@@ -230,14 +229,13 @@ fn main() {
     let mut incoming_edges_queue = vec![(0, target_node)];
     while let Some((depth, node_id)) = incoming_edges_queue.pop() {
         graph[node_id].distance.store(depth, Ordering::Relaxed);
-        if depth > 0 && should_ignore_node(node_id, Direction::Incoming) {
+        keep_indices.insert(node_id);
+        if depth > 0 && should_ignore_node(node_id, Direction::Incoming)
+            || depth == args.incoming_count
+        {
             graph[node_id]
                 .incoming_filtered
                 .store(true, Ordering::Relaxed);
-            continue;
-        }
-        keep_indices.insert(node_id);
-        if depth == args.incoming_count {
             continue;
         }
 
