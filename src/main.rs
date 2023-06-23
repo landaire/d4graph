@@ -3,7 +3,10 @@ use std::{
     fmt::Display,
     io::Write,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use clap::{command, Parser};
@@ -12,8 +15,9 @@ use petgraph::{
     algo::dijkstra,
     data::Build,
     dot::{Config, Dot},
+    graph::Node,
     prelude::*,
-    visit::IntoNodeIdentifiers,
+    visit::{IntoEdgesDirected, IntoNodeIdentifiers},
 };
 use rayon::prelude::*;
 use walkdir::WalkDir;
@@ -41,21 +45,31 @@ struct Args {
     json_path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Object {
     filename: String,
     id: usize,
+    incoming_filtered: AtomicBool,
+    outgoing_filtered: AtomicBool,
+    distance: AtomicUsize,
     outbound_references: Vec<usize>,
 }
 
 impl Display for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}\n(sno={})",
-            self.filename.split("/").last().unwrap(),
-            self.id
-        )
+        writeln!(f, "{}", self.filename.split("/").last().unwrap())?;
+        writeln!(f, "sno={}", self.id)?;
+        writeln!(f, "distance={}", self.distance.load(Ordering::Relaxed))?;
+
+        if self.incoming_filtered.load(Ordering::Relaxed) {
+            writeln!(f, "(incoming edges not shown)")?;
+        }
+
+        if self.outgoing_filtered.load(Ordering::Relaxed) {
+            writeln!(f, "(outgoing edges not shown)")?;
+        }
+
+        Ok(())
     }
 }
 
@@ -97,6 +111,9 @@ fn main() {
                 filename: json_obj["__fileName__"].as_str()?.to_string(),
                 id: json_obj["__snoID__"].as_u64()? as usize,
                 outbound_references: Vec::new(),
+                incoming_filtered: Default::default(),
+                outgoing_filtered: Default::default(),
+                distance: Default::default(),
             };
 
             let mut obj_queue = Vec::new();
@@ -176,8 +193,24 @@ fn main() {
     // Keep any nodes that are within a distance of 3 from the target node from the incoming direction
     let mut keep_indices = HashSet::new();
     let mut outgoing_edges_queue = vec![(0, target_node)];
+
+    let should_ignore_node = |node_id: NodeIndex, dir: Direction| {
+        // - We don't care about the continent (this explodes)
+        // - We don't care about Monster_AnimTree.ant (this explodes)
+        // - TODO: Maybe we don't care about things that have more than 20 outgoing edges?
+
+        let obj = &graph[node_id];
+        obj.filename.contains("World/")
+            || obj.id == 472400
+            || graph.edges_directed(node_id, dir).count() > 20
+    };
+
     while let Some((depth, node_id)) = outgoing_edges_queue.pop() {
-        if graph[node_id].filename.contains("World/") {
+        graph[node_id].distance.store(depth, Ordering::Relaxed);
+        if depth > 0 && should_ignore_node(node_id, Direction::Outgoing) {
+            graph[node_id]
+                .outgoing_filtered
+                .store(true, Ordering::Relaxed);
             continue;
         }
 
@@ -196,7 +229,11 @@ fn main() {
     // Keep any nodes that are within a distance of 3 from the target node from the incoming direction
     let mut incoming_edges_queue = vec![(0, target_node)];
     while let Some((depth, node_id)) = incoming_edges_queue.pop() {
-        if graph[node_id].filename.contains("World/") {
+        graph[node_id].distance.store(depth, Ordering::Relaxed);
+        if depth > 0 && should_ignore_node(node_id, Direction::Incoming) {
+            graph[node_id]
+                .incoming_filtered
+                .store(true, Ordering::Relaxed);
             continue;
         }
         keep_indices.insert(node_id);
