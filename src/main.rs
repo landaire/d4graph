@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Display,
+    io::Write,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -215,6 +216,34 @@ fn main() {
 
     println!("Writing graph");
 
-    let dot_data = Dot::with_config(&graph, &[Config::EdgeNoLabel]);
-    std::fs::write(&args.out_file, format!("{}", dot_data));
+    let binding = |graph: &Graph<_, _>, node_ref: (NodeIndex, &Object)| {
+        if node_ref.1.id == args.target_node_id {
+            ["fillcolor=blue", "style=filled"].join(" ")
+        } else {
+            "".to_string()
+        }
+    };
+    let dot_data = Dot::with_attr_getters(
+        &graph,
+        &[Config::EdgeNoLabel],
+        &|graph, edge_ref| ["color=white"].concat(),
+        &binding,
+    );
+    let header = r#"digraph {
+        bgcolor=black
+        node [color=white fillcolor=black style=filled fontcolor=white shape=box]
+        edge [color=white]
+    "#;
+    let digraph_str = "digraph {";
+    let mut generated_dot_file = Vec::new();
+    write!(generated_dot_file, "{}", dot_data).expect("failed to generate dot output");
+
+    let mut out_file = std::fs::File::create(&args.out_file).expect("failed to create output file");
+    out_file
+        .write_all(header.as_bytes())
+        .expect("failed to write all bytes for dot header");
+
+    out_file
+        .write_all(&generated_dot_file[digraph_str.len()..])
+        .expect("failed to write generated dot data");
 }
