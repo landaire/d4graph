@@ -38,6 +38,10 @@ struct Args {
     #[clap(short, long, default_value = "1315204")]
     target_node_id: usize,
 
+    /// Filter out incoming/outgoing nodes if there are more than this count
+    #[clap(long, default_value = "20")]
+    filter_count: usize,
+
     #[clap(short, long, default_value = "graph.dot")]
     out_file: PathBuf,
 
@@ -121,11 +125,11 @@ fn main() {
 
             while let Some(obj) = obj_queue.pop() {
                 if let Some(obj) = obj.as_object() {
-                    if obj.contains_key("value") && obj.contains_key("name") {
+                    if obj.contains_key("__raw__") && obj.contains_key("name") {
                         // reference to another file
                         return_object
                             .outbound_references
-                            .push(obj["value"].as_u64()? as usize);
+                            .push(obj["__raw__"].as_u64()? as usize);
                     } else {
                         for (_key, nested_obj) in obj.iter() {
                             if nested_obj.is_object() || nested_obj.is_array() {
@@ -166,7 +170,7 @@ fn main() {
     pb.finish();
 
     println!("Building edges");
-    let mut pb = ProgressBar::new(edges.len() as u64);
+    let pb = ProgressBar::new(edges.len() as u64);
     for (root_id, target_id) in edges {
         let root_idx = node_indices.get(&root_id).cloned();
         let target_idx = node_indices.get(&target_id).cloned();
@@ -189,12 +193,11 @@ fn main() {
         .cloned()
         .expect("Failed to find target node");
 
-    let mut indices: Vec<_> = graph.node_indices().collect();
     // Keep any nodes that are within a distance of 3 from the target node from the incoming direction
     let mut keep_indices = HashSet::new();
     let mut outgoing_edges_queue = vec![(0, target_node)];
 
-    let should_ignore_node = |node_id: NodeIndex, dir: Direction| {
+    let should_ignore_node_edges = |node_id: NodeIndex, dir: Direction| {
         // - We don't care about the continent (this explodes)
         // - We don't care about Monster_AnimTree.ant (this explodes)
         // - TODO: Maybe we don't care about things that have more than 20 outgoing edges?
@@ -202,14 +205,14 @@ fn main() {
         let obj = &graph[node_id];
         obj.filename.contains("World/")
             || obj.id == 472400
-            || graph.edges_directed(node_id, dir).count() > 20
+            || graph.edges_directed(node_id, dir).count() > args.filter_count
     };
 
     while let Some((depth, node_id)) = outgoing_edges_queue.pop() {
         graph[node_id].distance.store(depth, Ordering::Relaxed);
         keep_indices.insert(node_id);
 
-        if depth > 0 && should_ignore_node(node_id, Direction::Outgoing)
+        if depth > 0 && should_ignore_node_edges(node_id, Direction::Outgoing)
             || depth == args.outgoing_count
         {
             graph[node_id]
@@ -230,7 +233,7 @@ fn main() {
     while let Some((depth, node_id)) = incoming_edges_queue.pop() {
         graph[node_id].distance.store(depth, Ordering::Relaxed);
         keep_indices.insert(node_id);
-        if depth > 0 && should_ignore_node(node_id, Direction::Incoming)
+        if depth > 0 && should_ignore_node_edges(node_id, Direction::Incoming)
             || depth == args.incoming_count
         {
             graph[node_id]
